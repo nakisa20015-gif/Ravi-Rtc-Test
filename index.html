@@ -1,26 +1,35 @@
 <!doctype html>
-<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>RAVI Online RTC Test</title>
-<style>body{margin:0;background:#08111f;color:#fff;font-family:system-ui;padding:20px}h2{color:#d4af37}.row{display:flex;gap:8px;flex-wrap:wrap}input,button{font:inherit;padding:12px;border-radius:10px;border:1px solid #334155}input{background:#111c2e;color:#fff;flex:1}button{background:#d4af37;color:#08111f;font-weight:700}video{width:100%;background:#000;border-radius:14px;margin-top:12px;aspect-ratio:3/4;object-fit:cover}.videos{display:grid;grid-template-columns:1fr 1fr;gap:10px}#s{direction:ltr;text-align:left;background:#111c2e;padding:10px;border-radius:10px}</style></head>
-<body><h2>RAVI Online Test</h2><p id="s">Ready</p><div class="row"><input id="room" value="ravi-test" aria-label="room"><button id="join">ورود به اتاق</button></div><div class="videos"><div><small>من</small><video id="local" autoplay muted playsinline></video></div><div><small>طرف مقابل</small><video id="remote" autoplay playsinline></video></div></div>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>RAVI Online RTC Test v2</title>
+<style>body{margin:0;background:#08111f;color:#fff;font-family:system-ui;padding:20px}h2{color:#d4af37}.row{display:flex;gap:8px;flex-wrap:wrap}input,button{font:inherit;padding:12px;border-radius:10px;border:1px solid #334155}input{background:#111c2e;color:#fff;flex:1}button{background:#d4af37;color:#08111f;font-weight:700}video{width:100%;background:#000;border-radius:14px;margin-top:12px;aspect-ratio:3/4;object-fit:cover}.videos{display:grid;grid-template-columns:1fr 1fr;gap:10px}#s{direction:ltr;text-align:left;background:#111c2e;padding:10px;border-radius:10px;white-space:pre-wrap}</style></head>
+<body><h2>RAVI Online Test v2</h2><p id="s">Ready</p><div class="row"><input id="room" value="ravi-test"><button id="join">ورود به اتاق</button></div><div class="videos"><div><small>من</small><video id="local" autoplay muted playsinline></video></div><div><small>طرف مقابل</small><video id="remote" autoplay playsinline></video></div></div>
 <script type="module">
 import{createClient}from"https://esm.sh/@supabase/supabase-js@2";
 const sb=createClient("https://iqrzbbepfqiqojozodmj.supabase.co","sb_publishable_C5Oq7_yobOS02VgDzUv6nw_eZ3CYAqd",{auth:{persistSession:false}});
 const id=crypto.randomUUID(),s=document.querySelector("#s"),room=document.querySelector("#room"),join=document.querySelector("#join"),local=document.querySelector("#local"),remote=document.querySelector("#remote");
-let ch,pc,stream,remoteId=null,pending=[];
+let ch=null,pc=null,stream=null,remoteId=null,pending=[];
 const cfg={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]};
-function status(x){s.textContent=x}
-async function media(){if(!stream){stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});local.srcObject=stream}return stream}
-async function peer(){if(pc)return pc;await media();pc=new RTCPeerConnection(cfg);stream.getTracks().forEach(t=>pc.addTrack(t,stream));pc.ontrack=e=>{remote.srcObject=e.streams[0];remote.play().catch(()=>{});status("CONNECTED")};pc.onicecandidate=e=>{if(e.candidate&&remoteId)send("candidate",e.candidate,remoteId)};pc.onconnectionstatechange=()=>{status("WebRTC: "+pc.connectionState);if(["failed","closed"].includes(pc.connectionState))resetPeer()};return pc}
+const status=x=>s.textContent=x;
+async function media(){if(!stream){stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});local.srcObject=stream;await local.play().catch(()=>{})}return stream}
+async function makePeer(){if(pc)return pc;await media();const p=pc=new RTCPeerConnection(cfg);stream.getTracks().forEach(t=>p.addTrack(t,stream));
+p.ontrack=e=>{remote.srcObject=e.streams[0];remote.play().catch(()=>{});status("CONNECTED ✓")};
+p.onicecandidate=e=>{if(e.candidate&&remoteId)send("candidate",e.candidate,remoteId)};
+p.oniceconnectionstatechange=()=>status("ICE: "+p.iceConnectionState);
+p.onconnectionstatechange=()=>{if(p.connectionState==="connected")status("CONNECTED ✓");else if(p.connectionState==="failed")status("WebRTC failed — TURN may be required")};return p}
 function send(kind,data,to=null){return ch.send({type:"broadcast",event:"signal",payload:{from:id,to,kind,data}})}
-function resetPeer(){if(pc){pc.close();pc=null}pending=[];remote.srcObject=null}
-async function offer(to){remoteId=to;const p=await peer();const o=await p.createOffer();await p.setLocalDescription(o);await send("description",p.localDescription,to)}
+async function flush(p){while(pending.length&&p.remoteDescription)await p.addIceCandidate(pending.shift())}
+async function startOffer(to){remoteId=to;const p=await makePeer();if(p.signalingState!=="stable")return;const o=await p.createOffer();await p.setLocalDescription(o);await send("description",p.localDescription,to);status("Offer sent — connecting…")}
 async function handle(m){if(!m||m.from===id||(m.to&&m.to!==id))return;
- if(m.kind==="hello"){remoteId=m.from;if(id<m.from&&(!pc||pc.signalingState==="stable"))await offer(m.from);return}
- if(m.kind==="bye"){if(m.from===remoteId){remoteId=null;resetPeer();status("Peer left - waiting")};return}
- remoteId=m.from;const p=await peer();
- if(m.kind==="description"){const d=m.data;if(d.type==="offer"){if(p.signalingState!=="stable")resetPeer();const np=await peer();await np.setRemoteDescription(d);while(pending.length)await np.addIceCandidate(pending.shift());const a=await np.createAnswer();await np.setLocalDescription(a);await send("description",np.localDescription,m.from)}else{await p.setRemoteDescription(d);while(pending.length)await p.addIceCandidate(pending.shift())}}
- if(m.kind==="candidate"){if(p.remoteDescription)await p.addIceCandidate(m.data);else pending.push(m.data)}
+ if(m.kind==="hello"){remoteId=m.from;await send("hello-ack",{ok:true},m.from);if(id<m.from)await startOffer(m.from);return}
+ if(m.kind==="hello-ack"){remoteId=m.from;if(id<m.from)await startOffer(m.from);return}
+ if(m.kind==="bye"){if(m.from===remoteId){remoteId=null;if(pc){pc.close();pc=null}remote.srcObject=null;status("Peer left — waiting")};return}
+ remoteId=m.from;const p=await makePeer();
+ if(m.kind==="description"){const d=m.data;if(d.type==="offer"){if(p.signalingState!=="stable"){p.close();pc=null;pending=[]}const q=await makePeer();await q.setRemoteDescription(d);await flush(q);const a=await q.createAnswer();await q.setLocalDescription(a);await send("description",q.localDescription,m.from);status("Answer sent — connecting…")}else if(d.type==="answer"){await p.setRemoteDescription(d);await flush(p)}}
+ else if(m.kind==="candidate"){if(p.remoteDescription)await p.addIceCandidate(m.data);else pending.push(m.data)}
 }
-join.onclick=async()=>{try{join.disabled=true;await media();ch=sb.channel("ravi-rtc-"+room.value.trim(),{config:{broadcast:{self:false}}});ch.on("broadcast",{event:"signal"},x=>handle(x.payload).catch(e=>status("Signal error: "+e.message)));ch.subscribe(async st=>{if(st==="SUBSCRIBED"){status("JOINED - waiting for second phone");await send("hello",{ua:navigator.userAgent})}else if(st==="CHANNEL_ERROR")status("Realtime channel error")})}catch(e){status("ERROR: "+e.message);join.disabled=false}};
+join.onclick=async()=>{try{join.disabled=true;await media();const rn=room.value.trim()||"ravi-test";ch=sb.channel("ravi-rtc-"+rn,{config:{broadcast:{self:false},presence:{key:id}}});
+ch.on("broadcast",{event:"signal"},x=>handle(x.payload).catch(e=>status("Signal error: "+e.message)));
+ch.on("presence",{event:"sync"},async()=>{const peers=Object.keys(ch.presenceState()).filter(x=>x!==id);status("JOINED — peers: "+peers.length);if(peers.length){remoteId=peers[0];await send("hello",{ts:Date.now()})}});
+ch.subscribe(async st=>{if(st==="SUBSCRIBED"){await ch.track({id,ts:Date.now()});status("JOINED — waiting for second phone");await send("hello",{ts:Date.now()})}else if(st==="CHANNEL_ERROR")status("Realtime channel error")});
+}catch(e){status("ERROR: "+e.message);join.disabled=false}};
 addEventListener("pagehide",()=>{try{send("bye",null,remoteId)}catch{}});
 </script></body></html>
